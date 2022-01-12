@@ -1,6 +1,7 @@
 module multaNNx (
     input [15:0] aNN, // 1/aNN
-    input [36:0] X_r, //input X_old
+    input [36:0] X_r, //input X_old, or input b
+	input mult_ctrl,
     output [36:0] X_n //output X_new
 );
 
@@ -16,46 +17,69 @@ reg [36:0] X_n_r;
 assign X_n = X_n_r;
 
 always @(*) begin
-    if (X_r[36]) begin
-        if (X_r[35:31] != HIGH) begin
-            xr_sat = neg_max;
-        end
-        else begin
-            xr_sat[31] = 1;
-            xr_sat[30:0] = X_r[30:0]; 
-        end
-    end
-    else begin
-        if (X_r[35:31] != 0) begin
-            xr_sat = pos_max;
-        end
-        else begin
-            xr_sat[31] = 0;
-            xr_sat[30:0] = X_r[30:0];
-        end
-    end
+	if (mult_ctrl) begin
+		if (X_r[36]) begin
+			if (X_r[35:31] != HIGH) begin
+				xr_sat = neg_max;
+			end
+			else begin
+				xr_sat[31] = 1;
+				xr_sat[30:0] = X_r[30:0]; 
+			end
+		end
+		else begin
+			if (X_r[35:31] != 0) begin
+				xr_sat = pos_max;
+			end
+			else begin
+				xr_sat[31] = 0;
+				xr_sat[30:0] = X_r[30:0];
+			end
+		end
+	end
+	else begin
+		xr_sat = X_r[31:0]; //b:already sign-extend
+	end
 
     aNNx_sat = $signed(xr_sat) * $signed(aNN);
     X_n_r[36:32] = {5{aNNx_sat[47]}};
 
-    if (aNNx_sat[47]) begin
-        if (aNNx_sat[46:45] != HI) begin
-            X_n_r[31:0] = neg_max;
-        end
-        else begin
-            X_n_r[31] = 1;
-            X_n_r[30:0] = aNNx_sat[44:14];
-        end
-    end
-    else begin
-        if (aNNx_sat[46:45] != 0) begin
-            X_n_r[31:0] = pos_max;
-        end
-        else begin
-            X_n_r[31] = 0;
-            X_n_r[30:0] = aNNx_sat[44:14];
-        end
-    end
+	if (mult_ctrl) begin
+		if (aNNx_sat[47]) begin
+			X_n_r[31:0] = neg_max;
+			if (aNNx_sat[46:45] == HI) begin
+				X_n_r[31] = 1;
+				X_n_r[30:0] = aNNx_sat[44:14];
+			end
+		end
+		else begin
+			if (aNNx_sat[46:45] != 0) begin
+				X_n_r[31:0] = pos_max;
+			end
+			else begin
+				X_n_r[31] = 0;
+				X_n_r[30:0] = aNNx_sat[44:14];
+			end
+		end
+	end
+	else begin
+		if (aNNx_sat[47]) begin
+			X_n_r[31:0] = neg_max;
+			if (aNNx_sat[30:29] == HI) begin
+				X_n_r[31] = 1;
+				X_n_r[30:2] = aNNx_sat[28:0];
+				X_n_r[1:0] = 0;
+			end
+		end
+		else begin
+			X_n_r[31:0] = pos_max;
+			if (aNNx_sat[30:29] == 0) begin
+				X_n_r[31] = 0;
+				X_n_r[30:2] = aNNx_sat[28:0];
+				X_n_r[1:0] = 0;
+			end
+		end
+	end	
 end
     
 endmodule
@@ -100,48 +124,6 @@ end
 
 endmodule
 
-module multbaNN (
-    input [15:0] aNN,
-    input [15:0] b,
-    output [31:0] x_init
-);
-
-reg [31:0] ab_sat;
-reg [31:0] x_init_w;
-assign x_init = x_init_w;
-
-parameter pos_max = 32'b01111111111111111111111111111111;
-parameter neg_max = 32'b10000000000000000000000000000000;
-parameter HIGH = 2'b11;
-
-always @(*) begin
-    ab_sat = $signed(aNN) * $signed(b);
-
-    if (ab_sat[31]) begin
-        if (ab_sat[30:29] != HIGH) begin
-            x_init_w = neg_max;
-        end
-        else begin
-            x_init_w[31] = 1;
-            x_init_w[30:2] = ab_sat[28:0];
-            x_init_w[1:0] = 0;
-        end
-    end
-    else begin
-        if (ab_sat[30:29] != 0) begin
-            x_init_w = pos_max;
-        end
-        else begin
-            x_init_w[31] = 0;
-            x_init_w[30:2] = ab_sat[28:0];
-            x_init_w[1:0] = 0;
-        end
-    end
-end
-
-    
-endmodule
-
 module GSIM (                       //Don't modify interface
 	input          i_clk,
 	input          i_reset,
@@ -166,15 +148,14 @@ parameter INIT = 1'b0;
 parameter ITER = 1'b1;
 
 wire [15:0] aNN, a[0:14];
-wire [15:0] b;
 wire [36:0] x_old, x_new; //for mult_aNNx
 wire [31:0] x_in, x_out[0:14]; //for mult_ax:same input for different output;
-wire [31:0] x_init; //for mult_baNN
+reg mult_ctrl;
 wire b_enable;
 wire x_enable;
 wire out_enable;
 
-multaNNx aNNx(.aNN(aNN), .X_r(x_old), .X_n(x_new));
+multaNNx aNNx(.aNN(aNN), .X_r(x_old), .mult_ctrl(mult_ctrl), .X_n(x_new));
 multax ax0(.a(a[0]), .x_in(x_in), .x_out(x_out[0]));
 multax ax1(.a(a[1]), .x_in(x_in), .x_out(x_out[1]));
 multax ax2(.a(a[2]), .x_in(x_in), .x_out(x_out[2]));
@@ -190,10 +171,8 @@ multax ax11(.a(a[11]), .x_in(x_in), .x_out(x_out[11]));
 multax ax12(.a(a[12]), .x_in(x_in), .x_out(x_out[12]));
 multax ax13(.a(a[13]), .x_in(x_in), .x_out(x_out[13]));
 multax ax14(.a(a[14]), .x_in(x_in), .x_out(x_out[14]));
-multbaNN baNN(.aNN(aNN), .b(b), .x_init(x_init));
 
 reg [15:0] aNN_w, a_w[0:14]; 
-reg [15:0] b_w;
 reg [36:0] x_old_w;
 reg [31:0] x_in_w;
 
@@ -213,7 +192,6 @@ assign a[11] = a_w[11];
 assign a[12] = a_w[12];
 assign a[13] = a_w[13];
 assign a[14] = a_w[14];
-assign b = b_w;
 assign x_old = x_old_w;
 assign x_in = x_in_w;
  
@@ -232,13 +210,15 @@ reg x_wen_r, x_wen_w;
 reg [8:0] x_addr_r, x_addr_w;
 reg [31:0] x_data_r, x_data_w;
 reg done_r, done_w;
+reg enable_w, enable_r;
 
 integer j;
 
-assign b_enable = ((state_r == 0) && (data_cnt_r == 0) && (i_mem_dout_vld));
+//assign b_enable = ((!state_r) && (!data_cnt_r) && (i_mem_dout_vld));
+assign b_enable = enable_r;
 assign x_enable = ((i_mem_dout_vld) && (i_module_en));
 assign out_enable = (recur_cnt_r == 17);
-assign o_proc_done = done_r & i_module_en;
+assign o_proc_done = done_r;
 assign o_mem_rreq = 1'b1;
 assign o_mem_addr = mem_addr + (matrix_cnt_r << 4) + matrix_cnt_r;
 
@@ -261,19 +241,20 @@ always @(*) begin
 	x_data_w = x_data_r;
 	done_w = done_r;
 
-	x_old_w = 0;
-	x_in_w = 0;
-	aNN_w = 0;
-	b_w = 0;
+	x_old_w = x_old_w;
+	x_in_w = x_in_w;
+	aNN_w = aNN_w;
+	mult_ctrl = 1;
+
 	for (j = 0; j < 15; j = j+1) begin
-		a_w[j] = 0;
+		a_w[j] = a_w[j];
 	end
-	if (i_mem_rrdy) begin
-	end
+	enable_w = ((data_cnt_r == 0) && (!state_r) && (i_module_en));
 	if (i_module_en) begin
 		if (i_mem_dout_vld) begin
 			case (state_r)
 				INIT: begin
+					mult_ctrl = 0;
 					if (matrix_cnt_r == i_matrix_num) begin
 						done_w = 1;
 					end
@@ -282,13 +263,15 @@ always @(*) begin
 						for (j = 1; j < 17; j = j+1) begin
 							matrix_b_w[j][15:0] = i_mem_dout[j*16-1-:16];
 						end
+						//enable_w = 1;
 						data_cnt_w = data_cnt_r + 1;
 						mem_addr = 0;
 					end
 					else if (data_cnt_r == 16) begin
 						aNN_w = i_mem_dout[255:240];
-						b_w = matrix_b_r[16];
-						matrix_x_w[16] = {{5{x_init[31]}},x_init}; //X16,0
+						x_old_w = {{21{matrix_b_r[16][15]}}, matrix_b_r[16]};
+						//matrix_x_w[16] = {{5{x_init[31]}},x_init}; //X16,0
+						matrix_x_w[16] = x_new;
 						data_cnt_w = 1;
 						mem_addr = 0;
 						recur_cnt_w = 1;
@@ -296,8 +279,8 @@ always @(*) begin
 					end
 					else begin
 						aNN_w = i_mem_dout[(data_cnt_r<<4)-1-:16];
-						b_w = matrix_b_r[data_cnt_r];
-						matrix_x_w[data_cnt_r] = {{5{x_init[31]}},x_init}; //X?,0
+						x_old_w = {{21{matrix_b_r[data_cnt_r][15]}}, matrix_b_r[data_cnt_r]};
+						matrix_x_w[data_cnt_r] = x_new; //X?,0
 						data_cnt_w = data_cnt_r + 1;
 						mem_addr = {1'b0, data_cnt_r};
 					end
@@ -713,6 +696,7 @@ always @(*) begin
 								matrix_cnt_w = matrix_cnt_r + 1;
 								data_cnt_w = 0;
 								recur_cnt_w = 0;
+								enable_w = 1;
 							end
 						end
 						default: begin
@@ -723,6 +707,9 @@ always @(*) begin
 				end
 			endcase
 		end
+	end
+	else begin
+		done_w = i_module_en;
 	end
 end
 
@@ -741,6 +728,7 @@ always @(posedge i_clk or posedge i_reset) begin
 		x_addr_r <= 9'b111111111;
 		x_data_r <= 0;
 		done_r <= 0;
+		enable_r <= 0;
 	end
 	else begin
 		if (b_enable) begin
@@ -753,22 +741,27 @@ always @(posedge i_clk or posedge i_reset) begin
 				matrix_b_r[j] <= matrix_b_r[j];
 			end
 		end
-		if (x_enable) begin
-			for (j = 1; j < 17; j = j+1) begin
-				matrix_x_r[j] <= matrix_x_w[j];
-			end
+		// if (x_enable) begin
+		// 	for (j = 1; j < 17; j = j+1) begin
+		// 		matrix_x_r[j] <= matrix_x_w[j];
+		// 	end
+		// end
+		// else begin
+		// 	for (j = 1; j < 17; j = j+1) begin
+		// 		matrix_x_r[j] <= matrix_x_r[j];
+		// 	end
+		// end
+		// if (out_enable) begin
+		// 	x_data_r <= x_data_w;
+		// end
+		// else begin
+		// 	x_data_r <= x_data_r;
+		// end		
+		for (j = 1; j < 17; j = j+1) begin
+			matrix_x_r[j] <= matrix_x_w[j];
+			//matrix_b_r[j] <= matrix_b_w[j];
 		end
-		else begin
-			for (j = 1; j < 17; j = j+1) begin
-				matrix_x_r[j] <= matrix_x_r[j];
-			end
-		end
-		if (out_enable) begin
-			x_data_r <= x_data_w;
-		end
-		else begin
-			x_data_r <= x_data_r;
-		end		
+		x_data_r <= x_data_w;
 		mem_addr_r <= mem_addr;
 		data_cnt_r <= data_cnt_w;
 		recur_cnt_r <= recur_cnt_w;
@@ -777,6 +770,7 @@ always @(posedge i_clk or posedge i_reset) begin
 		x_wen_r <= x_wen_w;
 		x_addr_r <= x_addr_w;		
 		done_r <= done_w;
+		enable_r <= enable_w;
 	end
 end
 
